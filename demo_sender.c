@@ -20,6 +20,8 @@ int g_dest_port = -1;
 char *g_src_ip = "127.0.0.1";
 int g_src_port = 9001;
 
+pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 void *send_thread(void *arg){
     int ret;
     struct timeval tnow;
@@ -44,10 +46,12 @@ void *send_thread(void *arg){
             break;
         }
 
+        pthread_mutex_lock(&g_mutex);
         ret = ikcp_send(g_kcp, buf, ret);
         assert(ret >= 0);
         gettimeofday(&tnow, NULL);
-        //ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        pthread_mutex_unlock(&g_mutex);
     }
     return NULL;
 }
@@ -64,10 +68,11 @@ void *recv_thread(void *arg){
             assert(0);
         }
 
+        pthread_mutex_lock(&g_mutex);
         ikcp_input(g_kcp, buf, ret);
 
         gettimeofday(&tnow, NULL);
-        //ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
 
         while(1){
             char out[10*1024];
@@ -77,6 +82,7 @@ void *recv_thread(void *arg){
             }
             printf("recv size: %d\n", ret);
         }
+        pthread_mutex_unlock(&g_mutex);
     }
     return NULL;
 }
@@ -85,7 +91,9 @@ void *update_thread(void *arg){
     struct timeval tnow;
     while(1){
         gettimeofday(&tnow, NULL);
+        pthread_mutex_lock(&g_mutex);
         ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        pthread_mutex_unlock(&g_mutex);
         usleep(20*1000);
     }
     return NULL;

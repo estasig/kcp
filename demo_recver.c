@@ -29,11 +29,15 @@ char *g_listen_ip = NULL;
 int g_listen_port = -1;
 struct sockaddr_in g_dest_addr;
 
+pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 void *update_thread(void *arg){
     struct timeval tnow;
     while(1){
         gettimeofday(&tnow, NULL);
+        pthread_mutex_lock(&g_mutex);
         ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        pthread_mutex_unlock(&g_mutex);
         usleep(20*1000);
     }
     return NULL;
@@ -112,9 +116,10 @@ int main(int argc, char **argv){
         }
         memcpy(&g_dest_addr, &addr, sockaddr_len);
 
+        pthread_mutex_lock(&g_mutex);
         ikcp_input(g_kcp, buf, ret);
         gettimeofday(&tnow, NULL);
-        //ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
+        ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
 
 
         while(1){
@@ -129,6 +134,7 @@ int main(int argc, char **argv){
             send_to_player(out, ret);
             printf("total recv size: %d\n", g_total_recv);
         }
+        pthread_mutex_unlock(&g_mutex);
     }
     return 0;
 }
