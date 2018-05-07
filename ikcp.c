@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 
 
 
@@ -44,6 +45,31 @@ const IUINT32 IKCP_THRESH_MIN = 2;
 const IUINT32 IKCP_PROBE_INIT = 7000;		// 7 secs to probe window size
 const IUINT32 IKCP_PROBE_LIMIT = 120000;	// up to 120 secs to probe window
 
+
+static void print_cwnd(ikcpcb *kcp){
+    static int cwnd_begin_time = -1;
+    static int cwnd_last_time = -1;
+    static int cwnd_last_value = -1;
+    if(cwnd_begin_time == -1){
+        cwnd_begin_time = time(NULL);
+    }
+    if(cwnd_last_value == -1){
+        cwnd_last_value = kcp->cwnd;
+    }
+
+    int flag = 0;
+    int tnow = time(NULL);
+    if(cwnd_last_time != tnow){
+        flag = 1;
+    }else if(cwnd_last_value > kcp->cwnd){
+        flag = 1;
+    }
+    if(flag){
+        printf("cwnd change: %d %d\n", tnow-cwnd_begin_time, kcp->cwnd);
+        cwnd_last_value = kcp->cwnd;
+        cwnd_last_time = tnow;
+    }
+}
 
 //---------------------------------------------------------------------
 // encode / decode
@@ -786,6 +812,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			if (_itimediff(kcp->current, ts) >= 0) {
 				ikcp_update_ack(kcp, _itimediff(kcp->current, ts));
 			}
+            ikcp_log(kcp, IKCP_LOG_OUT_DATA, "[SN] ack %d", sn);
 			ikcp_parse_ack(kcp, sn);
 			ikcp_shrink_buf(kcp);
 			if (flag == 0) {
@@ -825,9 +852,19 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 						memcpy(seg->data, data, len);
 					}
 
+                    if(sn != kcp->rcv_nxt){
+                        printf("sn jump: %d -> %d\n", kcp->rcv_nxt, sn);
+                    }else{
+                        //printf("sn : %d\n", sn);
+                    }
 					ikcp_parse_data(kcp, seg);
-				}
-			}
+                }else{
+                    printf("sn again: %d\n", sn);
+                }
+            }else{
+                printf("sn exceed: %d\n", sn);
+
+            }
 		}
 		else if (cmd == IKCP_CMD_WASK) {
 			// ready to send back IKCP_CMD_WINS in ikcp_flush
@@ -861,16 +898,22 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			IUINT32 mss = kcp->mss;
 			if (kcp->cwnd < kcp->ssthresh) {
 				kcp->cwnd++;
+                print_cwnd(kcp);
+                ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] [1]  kcp->wnd %d", kcp->cwnd);
 				kcp->incr += mss;
 			}	else {
 				if (kcp->incr < mss) kcp->incr = mss;
 				kcp->incr += (mss * mss) / kcp->incr + (mss / 16);
 				if ((kcp->cwnd + 1) * mss <= kcp->incr) {
 					kcp->cwnd++;
+                    print_cwnd(kcp);
+                    ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] [2] kcp->wnd %d", kcp->cwnd);
 				}
 			}
 			if (kcp->cwnd > kcp->rmt_wnd) {
 				kcp->cwnd = kcp->rmt_wnd;
+                print_cwnd(kcp);
+                ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] [a] kcp->wnd %d", kcp->cwnd);
 				kcp->incr = kcp->rmt_wnd * mss;
 			}
 		}
@@ -910,6 +953,8 @@ static int ikcp_wnd_unused(const ikcpcb *kcp)
 //---------------------------------------------------------------------
 void ikcp_flush(ikcpcb *kcp)
 {
+    //ikcp_log(kcp, IKCP_LOG_MISC, "[MI] flush, queue %d, snd buf %d, nxt %d, una %d");
+    //ikcp_log(kcp, IKCP_LOG_MISC, "[MI]");
 	IUINT32 current = kcp->current;
 	char *buffer = kcp->buffer;
 	char *ptr = buffer;
@@ -997,6 +1042,7 @@ void ikcp_flush(ikcpcb *kcp)
 	cwnd = _imin_(kcp->snd_wnd, kcp->rmt_wnd);
 	if (kcp->nocwnd == 0) cwnd = _imin_(kcp->cwnd, cwnd);
 
+    //ikcp_log(kcp, IKCP_LOG_MISC, "[MI] wnd %d, %d, %d %d", kcp->snd_wnd, kcp->rmt_wnd, kcp->cwnd, cwnd);
 	// move data from snd_queue to snd_buf
 	while (_itimediff(kcp->snd_nxt, kcp->snd_una + cwnd) < 0) {
 		IKCPSEG *newseg;
@@ -1034,6 +1080,7 @@ void ikcp_flush(ikcpcb *kcp)
 			segment->xmit++;
 			segment->rto = kcp->rx_rto;
 			segment->resendts = current + segment->rto + rtomin;
+            ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] rto  %d, %d, %d, %d", kcp->rx_rto, segment->rto, rtomin, segment->rto+rtomin);
 		}
 		else if (_itimediff(current, segment->resendts) >= 0) {
 			needsend = 1;
@@ -1041,11 +1088,14 @@ void ikcp_flush(ikcpcb *kcp)
 			kcp->xmit++;
 			if (kcp->nodelay == 0) {
 				segment->rto += kcp->rx_rto;
+				//segment->rto += segment->rto;
 			}	else {
 				segment->rto += kcp->rx_rto / 2;
+				//segment->rto += segment->rto / 2;
 			}
 			segment->resendts = current + segment->rto;
 			lost = 1;
+            ikcp_log(kcp, IKCP_LOG_OUT_DATA, "[SN] lost %d", segment->sn);
 		}
 		else if (segment->fastack >= resent) {
 			needsend = 1;
@@ -1053,6 +1103,7 @@ void ikcp_flush(ikcpcb *kcp)
 			segment->fastack = 0;
 			segment->resendts = current + segment->rto;
 			change++;
+            ikcp_log(kcp, IKCP_LOG_OUT_DATA, "[SN] change %d", segment->sn);
 		}
 
 		if (needsend) {
@@ -1078,7 +1129,9 @@ void ikcp_flush(ikcpcb *kcp)
 
 			if (segment->xmit >= kcp->dead_link) {
 				kcp->state = -1;
-			}
+            }else{
+                ikcp_log(kcp, IKCP_LOG_OUT_DATA, "[SN] req %d", segment->sn);
+            }
 		}
 	}
 
@@ -1090,11 +1143,15 @@ void ikcp_flush(ikcpcb *kcp)
 
 	// update ssthresh
 	if (change) {
+        int old = kcp->cwnd;
 		IUINT32 inflight = kcp->snd_nxt - kcp->snd_una;
 		kcp->ssthresh = inflight / 2;
+		//kcp->ssthresh = inflight * 7 / 10;
 		if (kcp->ssthresh < IKCP_THRESH_MIN)
 			kcp->ssthresh = IKCP_THRESH_MIN;
 		kcp->cwnd = kcp->ssthresh + resent;
+        print_cwnd(kcp);
+        ikcp_log(kcp, IKCP_LOG_MISC, "[DOWN] [change] kcp->wnd %d ---> %d", old, kcp->cwnd);
 		kcp->incr = kcp->cwnd * kcp->mss;
 	}
 
@@ -1102,12 +1159,16 @@ void ikcp_flush(ikcpcb *kcp)
 		kcp->ssthresh = cwnd / 2;
 		if (kcp->ssthresh < IKCP_THRESH_MIN)
 			kcp->ssthresh = IKCP_THRESH_MIN;
+        ikcp_log(kcp, IKCP_LOG_MISC, "[DOWN] [lost] kcp->wnd %d ---> %d", kcp->cwnd, 1);
 		kcp->cwnd = 1;
+        print_cwnd(kcp);
 		kcp->incr = kcp->mss;
 	}
 
 	if (kcp->cwnd < 1) {
 		kcp->cwnd = 1;
+        print_cwnd(kcp);
+        ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] [d] kcp->wnd %d", kcp->cwnd);
 		kcp->incr = kcp->mss;
 	}
 }

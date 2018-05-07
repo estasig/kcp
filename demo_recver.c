@@ -1,4 +1,5 @@
 #include "ikcp.h"
+#include "demo_common.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
+#include "demo_common.h"
 
 
 ikcpcb *g_kcp = NULL;
@@ -31,14 +33,47 @@ struct sockaddr_in g_dest_addr;
 
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static void transmit_statistics(int len){
+    static unsigned long long s_total_len = 0;
+    static unsigned long long s_tlast = 0;
+    static unsigned long long s_segment_len = 0;
+    static unsigned long long s_begin_time = 0;
+
+    s_total_len += len;
+    s_segment_len += len;
+
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    unsigned long long tnow = now.tv_sec * 1000 + now.tv_usec / 1000;
+
+    if(s_begin_time == 0){
+        s_begin_time = tnow;
+    }
+
+    if(tnow - s_tlast > 1000){
+        int total_mill_seconds = tnow-s_begin_time;
+        int this_mill_seconds = tnow-s_tlast;
+        if(total_mill_seconds > 0){
+            printf("%d: total [%lluKB, %llukbps], now [%lluKB, %llukbps]\n",
+                    total_mill_seconds/1000,
+                    s_total_len/1024,
+                    s_total_len*8/total_mill_seconds,
+                    s_segment_len/1024,
+                    s_segment_len*8/this_mill_seconds);
+        }
+        s_segment_len = 0;
+        s_tlast = tnow;
+    }
+}
+
 void *update_thread(void *arg){
     struct timeval tnow;
     while(1){
-        gettimeofday(&tnow, NULL);
         pthread_mutex_lock(&g_mutex);
+        gettimeofday(&tnow, NULL);
         ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
         pthread_mutex_unlock(&g_mutex);
-        usleep(20*1000);
+        usleep(10*1000);
     }
     return NULL;
 }
@@ -80,6 +115,7 @@ int send_to_player(char *buf, int len){
 }
 
 int main(int argc, char **argv){
+    int val,ret;
     if(argc < 3){
         printf("usage: %s listen_ip listen_port\n", argv[0]);
         return -1;
@@ -94,26 +130,69 @@ int main(int argc, char **argv){
     listen_addr.sin_port = htons(g_listen_port);
     // create kcp object
     g_kcp = ikcp_create(g_conv, NULL);
+
+#if 0
+    g_kcp->logmask = IKCP_LOG_ALL;
+    g_kcp->writelog = writelog;
+#endif
+
     // create udp socket
     g_fd = socket(AF_INET, SOCK_DGRAM, 0);
     bind(g_fd, (const struct sockaddr *)&listen_addr, sizeof(listen_addr));
+
+    val = 4*1024*1024;
+    ret = setsockopt(g_fd, SOL_SOCKET, SO_SNDBUF, &val, sizeof(val));
+    assert(ret == 0);
+
+    val = 4*1024*1024;
+    ret = setsockopt(g_fd, SOL_SOCKET, SO_RCVBUF, &val, sizeof(val));
+    assert(ret == 0);
+
+
     // set output
+    g_kcp->stream = 1;
     ikcp_setoutput(g_kcp, output_cb);
     ikcp_wndsize(g_kcp, 1024, 1024);
-    ikcp_nodelay(g_kcp, 1, 10, 2, 1);
+    //ikcp_nodelay(g_kcp, 1, 10, 2, 1);
+    //ikcp_nodelay(g_kcp, 0, 40, 0, 0);
+    //ikcp_nodelay(g_kcp, 1, 10, 0, 0);
+    //ikcp_nodelay(g_kcp, 1, 10, 200, 0);
+    //ikcp_nodelay(g_kcp, 1, 10, 5, 0);
+    //ikcp_nodelay(g_kcp, 1, 10, 3, 0);
+    ikcp_nodelay(g_kcp, 0, 10, 3, 0);
+    //ikcp_nodelay(g_kcp, 0, 3, 3, 0);
+    ikcp_setmtu(g_kcp, CONFIG_MTU);
 
     pthread_t tid;
     pthread_create(&tid, NULL, update_thread, NULL);
 
+    static int s_recv_end = -1;
     while(1){
         struct timeval tnow;
         char buf[10*1024];
         struct sockaddr_in addr;
         socklen_t sockaddr_len = sizeof(addr);
+        static int s_tlast = -1;
+        int recv_begin = current_time_ms();
+        if(s_tlast < 0){
+            s_tlast = recv_begin;
+        }
+        if(recv_begin > s_tlast){
+            //printf("recvfrom interval: %d - %d = %d\n", recv_begin, s_tlast, recv_begin - s_tlast);
+        }
+        if(s_recv_end > 0 && recv_begin != s_recv_end){
+            //printf("kcp took: %d\n", recv_begin - s_recv_end);
+        }
+        s_tlast = recv_begin;
         int ret = recvfrom(g_fd, buf, sizeof(buf), 0, (struct sockaddr *)&addr, &sockaddr_len);
-        if(ret < 0){
+        if(ret <= 0){
             assert(0);
         }
+        int recv_end = current_time_ms();
+        if(recv_end > recv_begin){
+            //printf("recvfrom took: %d - %d = %d\n", recv_end, recv_begin, recv_end - recv_begin);
+        }
+        s_recv_end = recv_end;
         memcpy(&g_dest_addr, &addr, sockaddr_len);
 
         pthread_mutex_lock(&g_mutex);
@@ -123,17 +202,19 @@ int main(int argc, char **argv){
 
 
         while(1){
-            char out[1*1024];
+            char out[10*1024];
             ret = ikcp_recv(g_kcp, out, sizeof(out));
             if(ret < 0){
                 break;
             }else if(ret == 0){
                 continue;
             }
+            transmit_statistics(ret);
             g_total_recv += ret;
-            send_to_player(out, ret);
-            printf("total recv size: %d\n", g_total_recv);
+            //send_to_player(out, ret);
         }
+        gettimeofday(&tnow, NULL);
+        ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
         pthread_mutex_unlock(&g_mutex);
     }
     return 0;
