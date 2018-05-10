@@ -1165,7 +1165,7 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 
 	// update ssthresh
-	if (change && _itimediff(kcp->snd_una, kcp->ff_recovery_point)<0) {
+	if (change && _itimediff(kcp->snd_una, kcp->ff_recovery_point) >= 0) {
         int old = kcp->cwnd;
 		IUINT32 inflight = kcp->snd_nxt - kcp->snd_una;
 		//kcp->ssthresh = inflight / 2;
