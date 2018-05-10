@@ -243,6 +243,7 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->ts_lastack = 0;
 	kcp->ts_probe = 0;
 	kcp->probe_wait = 0;
+    kcp->ff_recovery_point = 0;
 	kcp->snd_wnd = IKCP_WND_SND;
 	kcp->rcv_wnd = IKCP_WND_RCV;
 	kcp->rmt_wnd = IKCP_WND_RCV;
@@ -742,6 +743,7 @@ void ikcp_parse_data(ikcpcb *kcp, IKCPSEG *newseg)
 int ikcp_input(ikcpcb *kcp, const char *data, long size)
 {
 	IUINT32 una = kcp->snd_una;
+    IUINT32 nsnd_buf = kcp->nsnd_buf;
 	IUINT32 maxack = 0;
 	int flag = 0;
 
@@ -856,7 +858,8 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		ikcp_parse_fastack(kcp, maxack);
 	}
 
-	if (_itimediff(kcp->snd_una, una) > 0) {
+    int i;
+    for(i=0; i<nsnd_buf-kcp->nsnd_buf; i++){
 		if (kcp->cwnd < kcp->rmt_wnd) {
 			IUINT32 mss = kcp->mss;
 			if (kcp->cwnd < kcp->ssthresh) {
@@ -864,7 +867,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 				kcp->incr += mss;
 			}	else {
 				if (kcp->incr < mss) kcp->incr = mss;
-				kcp->incr += (mss * mss) / kcp->incr + (mss / 16);
+				kcp->incr += (mss * mss) / kcp->incr + (mss / 4);
 				if ((kcp->cwnd + 1) * mss <= kcp->incr) {
 					kcp->cwnd++;
 				}
@@ -872,6 +875,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 			if (kcp->cwnd > kcp->rmt_wnd) {
 				kcp->cwnd = kcp->rmt_wnd;
 				kcp->incr = kcp->rmt_wnd * mss;
+                break;
 			}
 		}
 	}
@@ -1089,13 +1093,14 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 
 	// update ssthresh
-	if (change) {
+	if (change && _itimediff(kcp->snd_una, kcp->ff_recovery_point) >= 0) {
 		IUINT32 inflight = kcp->snd_nxt - kcp->snd_una;
-		kcp->ssthresh = inflight / 2;
+		kcp->ssthresh = inflight * 7 / 10;
 		if (kcp->ssthresh < IKCP_THRESH_MIN)
 			kcp->ssthresh = IKCP_THRESH_MIN;
 		kcp->cwnd = kcp->ssthresh + resent;
 		kcp->incr = kcp->cwnd * kcp->mss;
+        kcp->ff_recovery_point = kcp->snd_nxt;
 	}
 
 	if (lost) {
