@@ -3,9 +3,11 @@ tc(){
     comcast --stop
     sudo pfctl -E
     (cat /etc/pf.conf && echo "dummynet-anchor \"lichess\"" && echo "anchor \"lichess\"") | sudo pfctl -q -f -
-    echo "dummynet in quick proto $1 from any to any port $2 pipe 1" | sudo pfctl -q -a lichess -f -
+    #echo "dummynet in quick proto $1 from any to any port $2 pipe 1" | sudo pfctl -q -a lichess -f -
+    (echo "dummynet in quick proto $1 from any to any port $2 pipe 1" && echo "dummynet out quick proto $1 from any port $2 to any pipe 2") | sudo pfctl -q -a lichess -f -
     #echo $'dummynet in all pipe 1' | sudo pfctl -q -a lichess -f -
     sudo dnctl pipe 1 config delay $4 bw $5Kbit/s plr $6
+    sudo dnctl pipe 2 config delay $4 bw $5Kbit/s plr $6
 
     echo "====================================================="
     printf "$3:$1:$2 ::: dealy $4ms, bw $5Kbit/s, loss $6\n"

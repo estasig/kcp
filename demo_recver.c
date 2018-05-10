@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -11,6 +12,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+//#include <netinet/tcp_var.h>
 #include <pthread.h>
 #include "demo_common.h"
 
@@ -104,10 +106,19 @@ int send_to_player(char *buf, int len){
         int i;
         ret = setsockopt( c, IPPROTO_TCP, TCP_NODELAY, (void *)&i, sizeof(i) );
         assert(ret == 0);
-
-
         sc = c;
     }
+
+        struct tcp_connection_info tci;
+        unsigned int tcilen = sizeof(tci);
+        ret = getsockopt(sc, IPPROTO_TCP, TCP_CONNECTION_INFO, &tci, &tcilen);
+        if(ret < 0){
+            perror("getsockopt TCP_CONNECTION_INFO");
+        }
+        assert(ret == 0);
+        printf("tcp cwnd/ssthresh: %d/%d\n", tci.tcpi_snd_cwnd, tci.tcpi_snd_ssthresh);
+
+
 
     ret = write(sc, buf, len);
     assert(ret = len);

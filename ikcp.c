@@ -10,6 +10,7 @@
 //
 //=====================================================================
 #include "ikcp.h"
+#include "demo_common.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -51,19 +52,21 @@ static void print_cwnd(ikcpcb *kcp){
     static int cwnd_last_time = -1;
     static int cwnd_last_value = -1;
     if(cwnd_begin_time == -1){
-        cwnd_begin_time = time(NULL);
+        cwnd_begin_time = current_time_ms(NULL);
     }
     if(cwnd_last_value == -1){
         cwnd_last_value = kcp->cwnd;
     }
 
     int flag = 0;
-    int tnow = time(NULL);
+    int tnow = current_time_ms(NULL);
     if(cwnd_last_time != tnow){
         flag = 1;
     }else if(cwnd_last_value > kcp->cwnd){
         flag = 1;
     }
+
+    flag = 1;
     if(flag){
         printf("cwnd change: %d %d\n", tnow-cwnd_begin_time, kcp->cwnd);
         cwnd_last_value = kcp->cwnd;
@@ -269,6 +272,7 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->ts_lastack = 0;
 	kcp->ts_probe = 0;
 	kcp->probe_wait = 0;
+    kcp->ff_recovery_point = 0;
 	kcp->snd_wnd = IKCP_WND_SND;
 	kcp->rcv_wnd = IKCP_WND_RCV;
 	kcp->rmt_wnd = IKCP_WND_RCV;
@@ -768,6 +772,7 @@ void ikcp_parse_data(ikcpcb *kcp, IKCPSEG *newseg)
 int ikcp_input(ikcpcb *kcp, const char *data, long size)
 {
 	IUINT32 una = kcp->snd_una;
+    IUINT32 nsnd_buf = kcp->nsnd_buf;
 	IUINT32 maxack = 0;
 	int flag = 0;
 
@@ -893,7 +898,15 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 		ikcp_parse_fastack(kcp, maxack);
 	}
 
-	if (_itimediff(kcp->snd_una, una) > 0) {
+#if 0
+    if(kcp->snd_una < kcp->ff_recovery_point){
+        return 0;
+    }
+#endif
+
+	//if (_itimediff(kcp->snd_una, una) > 0) {
+    int i;
+    for(i=0; i<nsnd_buf-kcp->nsnd_buf; i++){
 		if (kcp->cwnd < kcp->rmt_wnd) {
 			IUINT32 mss = kcp->mss;
 			if (kcp->cwnd < kcp->ssthresh) {
@@ -903,7 +916,16 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
 				kcp->incr += mss;
 			}	else {
 				if (kcp->incr < mss) kcp->incr = mss;
-				kcp->incr += (mss * mss) / kcp->incr + (mss / 16);
+
+#if 0
+                if(_itimediff(kcp->snd_una, una) == 1){
+                    kcp->incr += (mss * mss) / kcp->incr + (mss / 16);
+                }else{
+                    kcp->incr += (mss * mss) / kcp->incr + (mss / 4);
+                }
+#endif
+                //kcp->incr += (mss * mss) / kcp->incr + (mss / 16);
+                kcp->incr += (mss * mss) / kcp->incr + (mss / 4);
 				if ((kcp->cwnd + 1) * mss <= kcp->incr) {
 					kcp->cwnd++;
                     print_cwnd(kcp);
@@ -915,6 +937,7 @@ int ikcp_input(ikcpcb *kcp, const char *data, long size)
                 print_cwnd(kcp);
                 ikcp_log(kcp, IKCP_LOG_INPUT, "[MI] [a] kcp->wnd %d", kcp->cwnd);
 				kcp->incr = kcp->rmt_wnd * mss;
+                break;
 			}
 		}
 	}
@@ -1142,17 +1165,18 @@ void ikcp_flush(ikcpcb *kcp)
 	}
 
 	// update ssthresh
-	if (change) {
+	if (change && _itimediff(kcp->snd_una, kcp->ff_recovery_point)<0) {
         int old = kcp->cwnd;
 		IUINT32 inflight = kcp->snd_nxt - kcp->snd_una;
-		kcp->ssthresh = inflight / 2;
-		//kcp->ssthresh = inflight * 7 / 10;
+		//kcp->ssthresh = inflight / 2;
+		kcp->ssthresh = inflight * 7 / 10;
 		if (kcp->ssthresh < IKCP_THRESH_MIN)
 			kcp->ssthresh = IKCP_THRESH_MIN;
 		kcp->cwnd = kcp->ssthresh + resent;
         print_cwnd(kcp);
         ikcp_log(kcp, IKCP_LOG_MISC, "[DOWN] [change] kcp->wnd %d ---> %d", old, kcp->cwnd);
 		kcp->incr = kcp->cwnd * kcp->mss;
+        kcp->ff_recovery_point = kcp->snd_nxt;
 	}
 
 	if (lost) {

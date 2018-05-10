@@ -115,7 +115,7 @@ void *send_thread(void *arg){
             gettimeofday(&tnow, NULL);
             ikcp_update(g_kcp, tnow.tv_sec * 1000 + tnow.tv_usec / 1000);
             //ikcp_flush(g_kcp);
-#if 0
+#if 1
             if(ikcp_waitsnd(g_kcp) >= CONFIG_MAX_BUFFER_PACKET){
                 printf("kcp buffer full...");fflush(stdout);
                 int wait_begin = time(NULL);
@@ -290,6 +290,11 @@ void *output_thread(void *arg){
         //msg->prev = &g_msg_queue;
         pthread_mutex_unlock(&g_msg_mutex);
         usleep(1*1000);
+        static int s_begin_time_of_send = -1;
+        if(s_begin_time_of_send < 0){
+            s_begin_time_of_send = current_time_ms();
+        }
+        printf("send unit: %d %d\n", current_time_ms()-s_begin_time_of_send, send_len > 0 ? send_len : 1);
     }
 
     return 0;
