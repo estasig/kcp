@@ -286,6 +286,7 @@ struct IKCPCB
 	IUINT32 current, interval, ts_flush, xmit;
 	IUINT32 nrcv_buf, nsnd_buf;
 	IUINT32 nrcv_que, nsnd_que;
+    IUINT32 wait_snd_bytes, wait_rcv_bytes;
 	IUINT32 nodelay, updated;
 	IUINT32 ts_probe, probe_wait;
 	IUINT32 dead_link, incr;
@@ -378,6 +379,9 @@ int ikcp_wndsize(ikcpcb *kcp, int sndwnd, int rcvwnd);
 
 // get how many packet is waiting to be sent
 int ikcp_waitsnd(const ikcpcb *kcp);
+
+int ikcp_waitsnd_bytes(const ikcpcb *kcp);
+int ikcp_waitrcv_bytes(const ikcpcb *kcp);
 
 // fastest: ikcp_nodelay(kcp, 1, 20, 2, 1)
 // nodelay: 0:disable(default), 1:enable

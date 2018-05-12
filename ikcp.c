@@ -208,6 +208,7 @@ static int ikcp_output(ikcpcb *kcp, const void *data, int size)
 		ikcp_log(kcp, IKCP_LOG_OUTPUT, "[RO] %ld bytes", (long)size);
 	}
 	if (size == 0) return 0;
+    kcp->wait_snd_bytes -= size;
 	return kcp->output((const char*)data, size, kcp, kcp->user);
 }
 
@@ -416,6 +417,7 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 			iqueue_del(&seg->node);
 			kcp->nrcv_buf--;
 			iqueue_add_tail(&seg->node, &kcp->rcv_queue);
+            kcp->wait_rcv_bytes += seg->len;
 			kcp->nrcv_que++;
 			kcp->rcv_nxt++;
 		}	else {
@@ -430,6 +432,7 @@ int ikcp_recv(ikcpcb *kcp, char *buffer, int len)
 		kcp->probe |= IKCP_ASK_TELL;
 	}
 
+    kcp->wait_rcv_bytes -= len;
 	return len;
 }
 
@@ -469,6 +472,7 @@ int ikcp_send(ikcpcb *kcp, const char *buffer, int len)
 {
 	IKCPSEG *seg;
 	int count, i;
+    int send_len = len;
 
 	assert(kcp->mss > 0);
 	if (len < 0) return -1;
@@ -499,6 +503,7 @@ int ikcp_send(ikcpcb *kcp, const char *buffer, int len)
 			}
 		}
 		if (len <= 0) {
+            kcp->wait_snd_bytes += send_len;
 			return 0;
 		}
 	}
@@ -532,6 +537,7 @@ int ikcp_send(ikcpcb *kcp, const char *buffer, int len)
 		len -= size;
 	}
 
+    kcp->wait_snd_bytes += send_len;
 	return 0;
 }
 
@@ -718,6 +724,7 @@ void ikcp_parse_data(ikcpcb *kcp, IKCPSEG *newseg)
 			iqueue_del(&seg->node);
 			kcp->nrcv_buf--;
 			iqueue_add_tail(&seg->node, &kcp->rcv_queue);
+            kcp->wait_rcv_bytes += seg->len;
 			kcp->nrcv_que++;
 			kcp->rcv_nxt++;
 		}	else {
@@ -1267,6 +1274,13 @@ int ikcp_waitsnd(const ikcpcb *kcp)
 	return kcp->nsnd_buf + kcp->nsnd_que;
 }
 
+int ikcp_waitsnd_bytes(const ikcpcb *kcp){
+    return kcp->wait_snd_bytes;
+}
+
+int ikcp_waitrcv_bytes(const ikcpcb *kcp){
+    return kcp->wait_rcv_bytes;
+}
 
 // read conv
 IUINT32 ikcp_getconv(const void *ptr)
