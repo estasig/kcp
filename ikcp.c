@@ -208,7 +208,6 @@ static int ikcp_output(ikcpcb *kcp, const void *data, int size)
 		ikcp_log(kcp, IKCP_LOG_OUTPUT, "[RO] %ld bytes", (long)size);
 	}
 	if (size == 0) return 0;
-    kcp->wait_snd_bytes -= size;
 	return kcp->output((const char*)data, size, kcp, kcp->user);
 }
 
@@ -254,6 +253,8 @@ ikcpcb* ikcp_create(IUINT32 conv, void *user)
 	kcp->mtu = IKCP_MTU_DEF;
 	kcp->mss = kcp->mtu - IKCP_OVERHEAD;
 	kcp->stream = 0;
+    kcp->wait_snd_bytes = 0;
+    kcp->wait_rcv_bytes = 0;
 
 	kcp->buffer = (char*)ikcp_malloc((kcp->mtu + IKCP_OVERHEAD) * 3);
 	if (kcp->buffer == NULL) {
@@ -584,6 +585,7 @@ static void ikcp_parse_ack(ikcpcb *kcp, IUINT32 sn)
 		IKCPSEG *seg = iqueue_entry(p, IKCPSEG, node);
 		next = p->next;
 		if (sn == seg->sn) {
+            kcp->wait_snd_bytes -= seg->len;
 			iqueue_del(p);
 			ikcp_segment_delete(kcp, seg);
 			kcp->nsnd_buf--;
@@ -602,6 +604,7 @@ static void ikcp_parse_una(ikcpcb *kcp, IUINT32 una)
 		IKCPSEG *seg = iqueue_entry(p, IKCPSEG, node);
 		next = p->next;
 		if (_itimediff(una, seg->sn) > 0) {
+            kcp->wait_snd_bytes -= seg->len;
 			iqueue_del(p);
 			ikcp_segment_delete(kcp, seg);
 			kcp->nsnd_buf--;
